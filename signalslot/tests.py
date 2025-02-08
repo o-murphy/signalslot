@@ -1,3 +1,6 @@
+import asyncio
+import time
+
 import pytest
 import mock
 
@@ -67,6 +70,22 @@ class TestSignal(object):
     def test_disconnect_does_not_fail_on_not_connected_slot(self, inspect):
         self.signal_a.disconnect(self.slot_b)
 
+    @pytest.mark.asyncio
+    async def test_emit_async_slot(self, inspect):
+        mock_slot = mock.Mock()
+        async def async_slot(arg, **kwargs):
+            mock_slot(arg, **kwargs)
+
+        self.signal_a.connect(async_slot)
+
+        emits = [self.signal_a.async_emit(arg=i) for i in range(3)]
+        await asyncio.gather(*emits)
+        mock_slot.assert_has_calls([
+            mock.call(0),
+            mock.call(1),
+            mock.call(2)
+        ], any_order=True)
+
 
 def test_anonymous_signal_has_nice_repr():
     signal = Signal()
@@ -94,6 +113,63 @@ class TestSignalConnect(object):
 
         with pytest.raises(SlotMustAcceptKeywords):
             self.signal.connect(cb)
+
+    def test_connect_via_decorator(self):
+        mock_slot = mock.Mock()
+
+        @self.signal.slot
+        def cb(**kwargs):
+            mock_slot(**kwargs)
+
+        self.signal.emit(arg='decorated')
+        mock_slot.assert_called_once_with(arg='decorated')
+
+
+class TestSignalOnce(object):
+    def setup_method(self, method):
+        self.signal = Signal(args=['arg'])
+        self.mock_slot = mock.Mock()
+        self.mock_error = mock.Mock()
+
+    def test_call_once(self):
+        self.signal.once(self.mock_slot)
+        self.signal.emit(arg='once')
+        self.signal.emit(arg='twice')
+
+        self.mock_slot.assert_called_once()
+
+    def test_call_once_with_timeout_intime(self):
+
+        self.signal.once(self.mock_slot, 0.2, self.mock_error)
+        time.sleep(0.1)
+        self.signal.emit(arg='intime')
+
+        self.mock_slot.assert_called_once_with(arg='intime')
+        self.mock_error.assert_not_called()
+
+    def test_call_once_with_timeout_overdue(self):
+
+        self.signal.once(self.mock_slot, 0.1, self.mock_error)
+        time.sleep(0.2)
+        self.signal.emit(arg='overdue')
+
+        self.mock_slot.assert_not_called()
+        self.mock_error.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_emit_async_once(self):
+
+        async def async_slot(arg, **kwargs):
+            self.mock_slot(arg, **kwargs)
+
+        self.signal.once(async_slot, 0.1, self.mock_error)
+        self.signal.once(async_slot, None, self.mock_error)
+        emits = [self.signal.async_emit(arg=i) for i in range(3)]
+        await asyncio.sleep(0.2)
+        await asyncio.gather(*emits)
+
+        self.mock_slot.assert_called_once()
+        self.mock_error.assert_called_once()
 
 
 class MyTestError(Exception):

@@ -139,6 +139,108 @@ class Signal(object):
             if result is not None:
                 return result
 
+    async def async_emit(self, **kwargs):
+        """
+        Async emitter for asynchronous callbacks.
+        Emit this signal which will execute every connected callback ``slot``,
+        passing keyword arguments.
+
+        If slot is awaitable object, then it will await it and return the result
+
+        If a slot returns anything other than None, then :py:meth:`emit` will
+        return that value preventing any other slot from being called.
+        """
+        for slot in self.slots:
+            result = slot(**kwargs)
+            if inspect.isawaitable(result):
+                result = await result
+
+            if result is not None:
+                return result
+
+    def slot(self, slot):
+        """
+        Decorator to connect a callback ``slot`` to this signal.
+
+        Args:
+            slot: callable object
+
+        Returns:
+            connected slot
+
+        Examples:
+            >>> some_signal = Signal()
+            ...
+            >>> @some_signal.slot
+            ... def some_slot(**kwargs):
+            ...     return 'called something'
+            ...
+            >>> some_signal.emit()
+        """
+        self.connect(slot)
+        return slot
+
+    def once(self, slot, timeout=None, on_timeout_reach=None):
+        """
+        Wraparounds a callback ``slot`` to ensure it will be called just once,
+        avoiding multiple calls on signal emit
+        Connects wrapped ``slot`` to this signal and disconnects it when slot called once
+        Optionally set a ``timeout`` to auto disconnect slot when timeout is exceeded
+        Optionally set an ``on_timeout_reach`` callback
+        that will be called if timeout is exceeded before slot called once
+
+        Args:
+            slot: callable object
+            timeout: timeout in seconds
+            on_timeout_reach: callback function calling when timeout is exceeded
+
+        Returns:
+            threading.Timer object if timeout is not None
+
+        Raises:
+            TypeError: if slot is not callable
+            ValueError: if timeout is negative
+
+        Examples:
+            >>> some_signal = Signal()
+            ...
+            >>> def some_slot(**kwargs):
+            ...     return 'called something'
+            ...
+            >>> def on_timeout():
+            ...     raise TimeoutError
+            ...
+            >>> timer = some_signal.once(some_slot, 5, on_timeout)
+            ...
+            >>> some_signal.emit()
+        """
+        timer = None
+
+        def wrapper(**kwargs):
+            if timer is not None:
+                timer.cancel()
+            self.disconnect(wrapper)
+            return slot(**kwargs)
+
+        if on_timeout_reach is not None and not callable(on_timeout_reach):
+            raise TypeError('Callback `on_timeout_error` must be callable')
+
+        if timeout is not None:
+            if timeout < 0:
+                raise ValueError(
+                    "Slot wait timeout must be non-negative")
+
+            def on_timeout():
+                self.disconnect(wrapper)
+                on_timeout_reach()
+
+            timer = threading.Timer(timeout, on_timeout)
+            timer.daemon = True
+            timer.start()
+
+        self.connect(wrapper)
+        return timer
+
     def __eq__(self, other):
         """
         Return True if other has the same slots connected.
