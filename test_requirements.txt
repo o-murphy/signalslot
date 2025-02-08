@@ -6,4 +6,5 @@ pytest-cov
 pytest-pep8
 pytest-sugar
 pytest-xdist
+pytest-asyncio
 coverage
